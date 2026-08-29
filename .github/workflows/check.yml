@@ -1,0 +1,36 @@
+name: Check
+
+# `main` is covered by the Main workflow, which runs the same checks before it
+# publishes, so this one only guards the way in.
+on:
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Types, build, tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      # Third-party action, so pinned to a SHA rather than a moving tag.
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+
+      # Frozen: a lockfile that no longer matches package.json fails the job
+      # instead of silently resolving something else than what we publish.
+      - run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run check
+
+      - name: Build
+        run: bun run build
+
+      - name: Test
+        run: bun test

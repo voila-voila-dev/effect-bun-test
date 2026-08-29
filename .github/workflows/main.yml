@@ -1,0 +1,70 @@
+name: Main
+
+# Everything that happens when `main` moves: the checks run, then the package
+# goes to public npm.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish to npm"
+        type: boolean
+        default: true
+
+concurrency:
+  group: main
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  # Required for npm Trusted Publishing (OIDC).
+  id-token: write
+
+jobs:
+  main:
+    name: Check and publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # `0.<effect rc>.<build>`: the minor tracks the Effect v4 RC line this
+      # build is compiled and tested against; the patch is the run number so
+      # every push publishes. Bump the minor together with the effect
+      # devDependency when moving to a newer RC.
+      PUBLISH_VERSION: 0.112.${{ github.run_number }}
+    steps:
+      - uses: actions/checkout@v7
+
+      # Third-party action, so pinned to a SHA rather than a moving tag.
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+
+      - run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run check
+
+      - name: Build
+        run: bun run build
+
+      - name: Test
+        run: bun test
+
+      # npm speaks OIDC trusted publishing; a token publish would answer with
+      # a 2FA challenge (`EOTP`) that nobody is there to type.
+      - uses: actions/setup-node@v6
+        if: github.event_name == 'push' || inputs.publish
+        with:
+          node-version: "24"
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Stamp the version
+        if: github.event_name == 'push' || inputs.publish
+        run: npm pkg set "version=${PUBLISH_VERSION}"
+
+      - name: Publish
+        if: github.event_name == 'push' || inputs.publish
+        run: npm publish --access public
