@@ -140,6 +140,36 @@ export interface TestCollectorCallable {
 }
 
 /**
+ * A parameterized test registrar, mirroring `test.each`.
+ *
+ * @since 4.0.0
+ */
+export interface TestEach {
+  <T>(cases: ReadonlyArray<T>): (
+    name: string,
+    fn: (value: T, ctx: TestContext) => unknown | Promise<unknown>,
+    options?: number | TestOptions
+  ) => void
+}
+
+/**
+ * The full test collector surface: the callable registrar plus the chained
+ * helpers (`skip`, `only`, `each`, `describe`, ...).
+ *
+ * @since 4.0.0
+ */
+export interface Collector extends TestCollectorCallable {
+  readonly skip: TestCollectorCallable & { readonly each: TestEach }
+  readonly only: TestCollectorCallable
+  readonly todo: (name: string) => void
+  readonly skipIf: (condition: unknown) => TestCollectorCallable
+  readonly runIf: (condition: unknown) => TestCollectorCallable
+  readonly fails: TestCollectorCallable
+  readonly each: TestEach
+  readonly describe: typeof bt.describe
+}
+
+/**
  * @since 4.0.0
  */
 export namespace BunTest {
@@ -232,7 +262,7 @@ export namespace BunTest {
   /**
    * @since 4.0.0
    */
-  export interface MethodsNonLive<R = never> extends API {
+  export interface MethodsNonLive<R = never> extends Collector {
     readonly effect: BunTest.Tester<R | Scope.Scope>
     readonly flakyTest: <A, E, R2>(
       self: Effect.Effect<A, E, R2 | Scope.Scope>,
@@ -295,14 +325,6 @@ export namespace BunTest {
         f: (it: BunTest.MethodsNonLive<R | R2>) => void
       ): void
     }
-    readonly skip: typeof internal.defaultApi.skip
-    readonly only: API
-    readonly todo: (name: string) => void
-    readonly skipIf: (condition: unknown) => API
-    readonly runIf: (condition: unknown) => API
-    readonly fails: API
-    readonly each: typeof internal.defaultApi.each
-    readonly describe: typeof describe
   }
 }
 
@@ -382,7 +404,7 @@ export const it: BunTest.Methods = internal.makeMethods(internal.defaultApi)
 /**
  * @since 4.0.0
  */
-export const makeMethods: (it: typeof internal.defaultApi) => BunTest.Methods = internal.makeMethods
+export const makeMethods: (it: Collector) => BunTest.Methods = internal.makeMethods
 
 /**
  * @since 4.0.0

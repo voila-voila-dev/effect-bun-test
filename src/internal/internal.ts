@@ -201,20 +201,7 @@ const skipCollector = Object.assign(
 )
 
 /** @internal */
-export const defaultApi: BunTest.API & {
-  skip: typeof skipCollector
-  only: BunTest.API
-  todo: (name: string) => void
-  skipIf: (condition: unknown) => BunTest.API
-  runIf: (condition: unknown) => BunTest.API
-  fails: BunTest.API
-  each: <T>(cases: ReadonlyArray<T>) => (
-    name: string,
-    fn: (value: T, ctx: BunTest.TestContext) => unknown | Promise<unknown>,
-    options?: number | BunTest.TestOptions
-  ) => void
-  describe: typeof describe
-} = Object.assign(baseCollector, {
+export const defaultApi: BunTest.Collector = Object.assign(baseCollector, {
   skip: skipCollector,
   only: registerWith(bunTest.only) as BunTest.API,
   todo: (name: string) => bunTest.todo(name, () => {}),
@@ -330,7 +317,7 @@ const withBackstopTimeout = (
  * would otherwise clobber the shared `defaultApi` (and each other) when
  * attaching their own `effect`/`live` testers.
  */
-const extendApi = <M extends object>(it: typeof defaultApi, overrides: M): typeof defaultApi & M => {
+const extendApi = <M extends object>(it: BunTest.Collector, overrides: M): BunTest.Collector & M => {
   const f = ((...args: ReadonlyArray<never>) => (it as (...args: ReadonlyArray<never>) => void)(...args)) as any
   return Object.assign(f, it, overrides)
 }
@@ -338,7 +325,7 @@ const extendApi = <M extends object>(it: typeof defaultApi, overrides: M): typeo
 /** @internal */
 const makeTester = <R>(
   mapEffect: <A, E>(self: Effect.Effect<A, E, R>) => Effect.Effect<A, E, never>,
-  it: typeof defaultApi = defaultApi
+  it: BunTest.Collector = defaultApi
 ): BunTest.BunTest.Tester<R> => {
   const run = <A, E, TestArgs extends Array<unknown>>(
     ctx: BunTest.TestContext,
@@ -499,7 +486,7 @@ export const layer = <R, E>(
     return runPromise(Scope.close(scope, Exit.void)) as Promise<void>
   }
 
-  const makeIt = (it: typeof defaultApi): BunTest.BunTest.MethodsNonLive<R> =>
+  const makeIt = (it: BunTest.Collector): BunTest.BunTest.MethodsNonLive<R> =>
     extendApi(it, {
       effect: makeTester<R | Scope.Scope>(
         (effect) =>
@@ -570,7 +557,7 @@ export const flakyTest = <A, E, R>(
   )
 
 /** @internal */
-export const makeMethods = (it: typeof defaultApi): BunTest.BunTest.Methods =>
+export const makeMethods = (it: BunTest.Collector): BunTest.BunTest.Methods =>
   extendApi(it, {
     effect: makeTester<Scope.Scope>(flow(Effect.scoped, Effect.provide(TestEnv)), it),
     live: makeTester<Scope.Scope>(Effect.scoped, it),
