@@ -2,7 +2,7 @@
   "name": "@voila.dev/effect-bun-test",
   "version": "0.0.0",
   "type": "module",
-  "packageManager": "bun@1.2.23",
+  "packageManager": "bun@1.4.3",
   "license": "MIT",
   "description": "Effect v4 testing helpers for Bun's native bun:test runner — the @effect/vitest API on Bun",
   "homepage": "https://github.com/voila-voila-dev/effect-bun-test",
@@ -45,8 +45,8 @@
     "ci": "bun run check && bun run build && bun test"
   },
   "peerDependencies": {
-    "effect": "^4.0.0-rc.112",
-    "@types/bun": ">=1.2.0"
+    "effect": "^4.0.3",
+    "@types/bun": ">=1.4.0"
   },
   "peerDependenciesMeta": {
     "@types/bun": {
@@ -54,8 +54,8 @@
     }
   },
   "devDependencies": {
-    "@types/bun": "^1.3.4",
-    "effect": "4.0.0-rc.112",
-    "typescript": "^5.9.3"
+    "@types/bun": "1.4.3",
+    "effect": "4.0.3",
+    "typescript": "7.0.2"
   }
 }

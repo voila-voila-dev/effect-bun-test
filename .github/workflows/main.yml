@@ -28,11 +28,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      # `0.<effect rc>.<build>`: the minor tracks the Effect v4 RC line this
-      # build is compiled and tested against; the patch is the run number so
-      # every push publishes. Bump the minor together with the effect
-      # devDependency when moving to a newer RC.
-      PUBLISH_VERSION: 0.112.${{ github.run_number }}
+      # `<effect major>.<effect minor>.<run number>`: major and minor follow
+      # the Effect line this build is compiled and tested against, the patch
+      # makes every push publish. Bump them with the effect devDependency when
+      # Effect moves to a new minor.
+      PUBLISH_VERSION: 4.0.${{ github.run_number }}
     steps:
       - uses: actions/checkout@v7
 
@@ -54,7 +54,7 @@ jobs:
 
       # npm speaks OIDC trusted publishing; a token publish would answer with
       # a 2FA challenge (`EOTP`) that nobody is there to type.
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         if: github.event_name == 'push' || inputs.publish
         with:
           node-version: "24"

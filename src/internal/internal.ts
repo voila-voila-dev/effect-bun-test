@@ -11,11 +11,11 @@ import { flow, pipe } from "effect/Function"
 import * as Layer from "effect/Layer"
 import { isObject } from "effect/Predicate"
 import * as Schedule from "effect/Schedule"
-import * as Schema from "effect/Schema"
+import type * as Schema from "effect/Schema"
 import * as Scope from "effect/Scope"
-import * as fc from "effect/testing/FastCheck"
 import * as TestClock from "effect/testing/TestClock"
 import * as TestConsole from "effect/testing/TestConsole"
+import * as Arbitrary from "effect/Arbitrary"
 import type * as BunTest from "../index.ts"
 
 // ----------------------------------------------------------------------------
@@ -203,7 +203,9 @@ const skipCollector = Object.assign(
 /** @internal */
 export const defaultApi: BunTest.Collector = Object.assign(baseCollector, {
   skip: skipCollector,
-  only: registerWith(bunTest.only) as BunTest.API,
+  // Read on call: under `CI`, Bun throws as soon as `test.only` is accessed,
+  // which would fail every suite that merely imports this module.
+  only: ((...args: Parameters<ReturnType<typeof registerWith>>) => registerWith(bunTest.only)(...args)) as BunTest.API,
   todo: (name: string) => bunTest.todo(name, () => {}),
   skipIf: (condition: unknown) => registerWith(bunTest.skipIf(condition)) as BunTest.API,
   runIf: (condition: unknown) => registerWith(bunTest.if(condition)) as BunTest.API,
@@ -271,14 +273,60 @@ export const addEqualityTesters = () => {
 }
 
 // ----------------------------------------------------------------------------
-// Property testing (effect/testing/FastCheck)
+// Property testing (effect/Arbitrary)
 // ----------------------------------------------------------------------------
 
-const toArbitrary = (input: unknown): fc.Arbitrary<any> =>
-  Schema.isSchema(input) ? Schema.toArbitrary(input as Schema.Schema<any>)(fc) : input as fc.Arbitrary<any>
+type PropertyTimeout =
+  | number
+  | BunTest.TestOptions & {
+    readonly arbitrary?: Arbitrary.CheckOptions | undefined
+  }
 
-const fastCheckParameters = (timeout: number | BunTest.TestOptions | undefined): object =>
-  isObject(timeout) && "fastCheck" in timeout ? (timeout as { fastCheck?: object }).fastCheck ?? {} : {}
+type ArbitraryInput = Schema.Schema<any> | Arbitrary.Arbitrary<unknown>
+
+type Arbitraries = Array<ArbitraryInput> | { [K in string]: ArbitraryInput }
+
+const checkOptions = (timeout: PropertyTimeout | undefined): Arbitrary.CheckOptions | undefined =>
+  typeof timeout === "number" ? undefined : timeout?.arbitrary
+
+const compileArbitraryInput = (input: ArbitraryInput): Arbitrary.Arbitrary<any> =>
+  Arbitrary.isArbitrary(input) ? input : Arbitrary.schema(input)
+
+const makeArbitrary = (arbitraries: Arbitraries): Arbitrary.Arbitrary<any> =>
+  Arbitrary.all(
+    Array.isArray(arbitraries)
+      ? arbitraries.map(compileArbitraryInput)
+      : Object.fromEntries(Object.entries(arbitraries).map(([key, input]) => [key, compileArbitraryInput(input)]))
+  )
+
+const normalizeProperty = <A, E, R>(
+  property: (value: A) => boolean | Effect.Effect<boolean, E, R>,
+  value: A
+): Effect.Effect<boolean, E | Cause.Cause<E>, R> =>
+  Effect.catchCause(
+    Effect.suspend(() => {
+      const output = property(value)
+      return Effect.isEffect(output) ? output : Effect.succeed(output)
+    }),
+    (cause): Effect.Effect<never, E | Cause.Cause<E>> =>
+      Cause.hasInterrupts(cause) ? Effect.failCause(cause) : Effect.fail(cause)
+  )
+
+const runCheck = <A, E>(
+  ctx: BunTest.TestContext,
+  arbitrary: Arbitrary.Arbitrary<A>,
+  property: (value: A) => boolean | Effect.Effect<boolean, E>,
+  options: Arbitrary.CheckOptions | undefined
+): Promise<void> =>
+  runTest(ctx)(
+    Effect.flatMapEager(
+      Arbitrary.checkEffect(arbitrary, (value) => normalizeProperty(property, value), options),
+      (result) => {
+        const failure = Arbitrary.formatCheckFailure(result)
+        return failure === undefined ? Effect.void : Effect.die(new Error(failure))
+      }
+    )
+  )
 
 // ----------------------------------------------------------------------------
 // Testers
@@ -333,12 +381,14 @@ const makeTester = <R>(
     self: BunTest.BunTest.TestFunction<A, E, R, TestArgs>
   ) => pipe(Effect.suspend(() => self(...args)), mapEffect, runTest(ctx))
 
-  const testBody =
-    <A, E>(self: BunTest.BunTest.TestFunction<A, E, R, [BunTest.TestContext]>, timeout?: number | BunTest.TestOptions) =>
-    () => {
-      const ctx = makeTestContext(timeout)
-      return run(ctx, [ctx], self)
-    }
+  const testBody = <A, E>(
+    self: BunTest.BunTest.TestFunction<A, E, R, [BunTest.TestContext]>,
+    timeout?: number | BunTest.TestOptions
+  ) =>
+  () => {
+    const ctx = makeTestContext(timeout)
+    return run(ctx, [ctx], self)
+  }
 
   const f: BunTest.BunTest.Test<R> = (name, self, timeout) =>
     it(name, testBody(self, timeout), withBackstopTimeout(timeout))
@@ -355,12 +405,14 @@ const makeTester = <R>(
   const only: BunTest.BunTest.Tester<R>["only"] = (name, self, timeout) =>
     it.only(name, testBody(self, timeout), withBackstopTimeout(timeout))
 
+  // Bun spreads an array case into arguments; wrapping each case in a
+  // one-element tuple hands the Effect test the case whole, as `it.for` does.
   const each: BunTest.BunTest.Tester<R>["each"] = (cases) => (name, self, timeout) =>
-    it.each(cases)(
+    it.each(cases.map((value) => [value]))(
       name,
       (value) => {
         const ctx = makeTestContext(timeout)
-        return run(ctx, [value] as any, self as any)
+        return run(ctx, [value as unknown as (typeof cases)[number], ctx], self)
       },
       withBackstopTimeout(timeout)
     )
@@ -369,36 +421,20 @@ const makeTester = <R>(
     it.fails(name, testBody(self, timeout), withBackstopTimeout(timeout))
 
   const prop: BunTest.BunTest.Tester<R>["prop"] = (name, arbitraries, self, timeout) => {
-    if (Array.isArray(arbitraries)) {
-      const arbs = arbitraries.map(toArbitrary)
-      return it(
-        name,
-        () => {
-          const ctx = makeTestContext(timeout)
-          // @ts-ignore
-          return fc.assert(
-            // @ts-ignore
-            fc.asyncProperty(...arbs, (...as: Array<unknown>) => run(ctx, [as as any, ctx], self as any)),
-            fastCheckParameters(timeout)
-          )
-        },
-        withBackstopTimeout(timeout)
-      )
-    }
-
-    const arbs = fc.record(
-      Object.fromEntries(
-        Object.entries(arbitraries).map(([key, input]) => [key, toArbitrary(input)])
-      )
-    )
-
+    const arbitrary = makeArbitrary(arbitraries)
     return it(
       name,
       () => {
         const ctx = makeTestContext(timeout)
-        return (fc.assert as any)(
-          fc.asyncProperty(arbs, (as: Record<string, unknown>) => run(ctx, [as as any, ctx], self as any)),
-          fastCheckParameters(timeout)
+        return runCheck(
+          ctx,
+          arbitrary,
+          (values) =>
+            Effect.mapEager(
+              mapEffect(Effect.suspend(() => self(values as any, ctx))),
+              (value) => (value as unknown) !== false
+            ),
+          checkOptions(timeout)
         )
       },
       withBackstopTimeout(timeout)
@@ -410,35 +446,19 @@ const makeTester = <R>(
 
 /** @internal */
 export const prop: BunTest.BunTest.Methods["prop"] = (name, arbitraries, self, timeout) => {
-  if (Array.isArray(arbitraries)) {
-    const arbs = arbitraries.map(toArbitrary)
-    return defaultApi(
-      name,
-      (ctx) =>
-        // @ts-ignore
-        fc.assert(
-          // @ts-ignore
-          fc.property(...arbs, (...as: Array<unknown>) => (self as any)(as, ctx)),
-          fastCheckParameters(timeout)
-        ),
-      timeout
-    )
-  }
-
-  const arbs = fc.record(
-    Object.fromEntries(
-      Object.entries(arbitraries).map(([key, input]) => [key, toArbitrary(input)])
-    )
-  )
-
+  const arbitrary = makeArbitrary(arbitraries)
   return defaultApi(
     name,
-    (ctx) =>
-      (fc.assert as any)(
-        fc.property(arbs, (as: Record<string, unknown>) => (self as any)(as, ctx)),
-        fastCheckParameters(timeout)
-      ),
-    timeout
+    () => {
+      const ctx = makeTestContext(timeout)
+      return runCheck(
+        ctx,
+        arbitrary,
+        (values) => (self(values as any, ctx) as unknown) !== false,
+        checkOptions(timeout)
+      )
+    },
+    withBackstopTimeout(timeout)
   )
 }
 
@@ -450,6 +470,7 @@ export const prop: BunTest.BunTest.Methods["prop"] = (name, arbitraries, self, t
 export const layer = <R, E>(
   layer_: Layer.Layer<R, E>,
   options?: {
+    readonly concurrent?: boolean
     readonly memoMap?: Layer.MemoMap
     readonly timeout?: Duration.Input
     readonly excludeTestServices?: boolean
@@ -500,6 +521,7 @@ export const layer = <R, E>(
       prop,
       flakyTest,
       layer<R2, E2>(nestedLayer: Layer.Layer<R2, E2, R>, options?: {
+        readonly concurrent?: boolean
         readonly timeout?: Duration.Input
       }) {
         return layer(Layer.provideMerge(nestedLayer, withTestEnv), {
@@ -527,7 +549,15 @@ export const layer = <R, E>(
     return args[0](makeIt(defaultApi))
   }
 
-  return describe(args[0], () => {
+  // Unset, the named block inherits the enclosing suite's mode; an anonymous
+  // block opens no suite, so it always runs in the enclosing one's.
+  const suite = options?.concurrent === undefined
+    ? describe
+    : options.concurrent
+    ? describe.concurrent
+    : describe.serial
+
+  return suite(args[0], () => {
     registerHooks()
     return args[1](makeIt(defaultApi))
   })
