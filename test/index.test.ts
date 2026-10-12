@@ -1,12 +1,13 @@
+import * as Arbitrary from "effect/Arbitrary"
 import { Clock, Context, Duration, Effect, Fiber, Layer, Schema } from "effect"
-import { FastCheck, TestClock } from "effect/testing"
+import { TestClock } from "effect/testing"
 import { afterAll, assert, describe, expect, it, layer } from "../src/index.ts"
 import * as testAssert from "../src/utils.ts"
 
 // Declared ahead of the describe blocks: Bun evaluates describe callbacks
 // synchronously during module evaluation, so a later `const` would be in TDZ.
-const realNumber = FastCheck.float({ noNaN: true, noDefaultInfinity: true })
-const textArbitrary = FastCheck.constantFrom("a", "b")
+const realNumber = Schema.Finite
+const textArbitrary = Arbitrary.schema(Schema.Literals(["a", "b"]))
 
 it.effect(
   "effect",
@@ -34,6 +35,14 @@ it.effect.each([1, 2, 3])(
 it.live.each([1, 2, 3])(
   "live each %s",
   (n) => Effect.acquireRelease(Effect.sync(() => expect(n).toEqual(n)), () => Effect.void)
+)
+it.effect.each([[1, 2], [3, 4]])(
+  "effect each receives an array case whole, then the context",
+  (pair, ctx) =>
+    Effect.sync(() => {
+      assert.strictEqual(pair.length, 2)
+      assert.isTrue(ctx.signal instanceof AbortSignal)
+    })
 )
 
 // skip
@@ -175,7 +184,7 @@ describe("layer", () => {
             expect(foo).toEqual("foo")
             return num === num
           }),
-        { fastCheck: { numRuns: 200 } }
+        { arbitrary: { runs: 200 } }
       )
 
       it.effect.prop(
@@ -187,7 +196,7 @@ describe("layer", () => {
             assert.strictEqual(foo, "foo")
             assert.isTrue(Number.isInteger(value))
           }),
-        { fastCheck: { numRuns: 5 } }
+        { arbitrary: { runs: 5, seed: "bun-test-arbitrary-layer" } }
       )
     })
   })
@@ -256,7 +265,7 @@ it.prop(
     assert.isTrue(Number.isInteger(count))
     assert.include(["a", "b"], text)
   },
-  { fastCheck: { numRuns: 5 } }
+  { arbitrary: { runs: 5, maxDiscards: 0, seed: "bun-test-mixed-tuple" } }
 )
 
 it.effect.prop(
@@ -268,7 +277,7 @@ it.effect.prop(
       assert.isTrue(Number.isInteger(count))
       assert.include(["a", "b"], text)
     }),
-  { fastCheck: { numRuns: 5 } }
+  { arbitrary: { runs: 5, maxDiscards: 0, seed: "bun-test-mixed-record" } }
 )
 
 it.prop("symmetry", [realNumber, Schema.Int], ([a, b]) => a + b === b + a)
@@ -297,7 +306,7 @@ it.effect.prop(
       assert.strictEqual(typeof text, "string")
       assert.isTrue(Number.isInteger(count))
     }),
-  { fastCheck: { numRuns: 5 } }
+  { arbitrary: { runs: 5, maxDiscards: 0, seed: "bun-test-arbitrary" } }
 )
 
 it.effect.prop("symmetry", [realNumber, Schema.Int], ([a, b]) =>
@@ -323,31 +332,55 @@ it.effect.prop(
 )
 
 describe("property failures", () => {
-  const failureValues: Array<number> = []
+  const Input = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 1_000 }))
+  const pureDefectValues: Array<number> = []
+  const effectDefectValues: Array<number> = []
+  let interruptedRuns = 0
   let timeoutPropertyStarted = false
   let timeoutPropertyReleased = false
 
   afterAll(() => {
-    // fast-check shrinks an always-failing integer property down to its minimum
-    assert.isTrue(failureValues.length > 0)
-    assert.strictEqual(failureValues[failureValues.length - 1], 1)
+    assert.deepStrictEqual(pureDefectValues, [8, 1])
+    assert.deepStrictEqual(effectDefectValues, [8, 1])
+    assert.strictEqual(interruptedRuns, 1)
     assert.isTrue(timeoutPropertyStarted)
     assert.isTrue(timeoutPropertyReleased)
   })
 
   it.prop(
     "shrinks synchronous defects",
-    [FastCheck.integer({ min: 1, max: 1_000 })],
+    [Input],
     ([value]) => {
-      failureValues.push(value)
+      pureDefectValues.push(value)
       throw new Error("property defect")
     },
-    { fails: true, fastCheck: { numRuns: 1 } }
+    { fails: true, arbitrary: { runs: 1, seed: "assertion-shrink" } }
+  )
+
+  it.effect.prop(
+    "shrinks Effect defects",
+    [Input],
+    ([value]) =>
+      Effect.sync(() => {
+        effectDefectValues.push(value)
+        assert.strictEqual(value, 0)
+      }),
+    { fails: true, arbitrary: { runs: 1, seed: "assertion-shrink" } }
+  )
+
+  it.effect.prop(
+    "preserves interruption",
+    [Input],
+    () => {
+      interruptedRuns++
+      return Effect.interrupt
+    },
+    { fails: true, arbitrary: { runs: 1, seed: "assertion-shrink" } }
   )
 
   it.effect.prop(
     "interrupts property checking on timeout",
-    [FastCheck.constant("value")],
+    [Schema.Literal("value")],
     () =>
       Effect.acquireUseRelease(
         Effect.sync(() => {
@@ -359,6 +392,6 @@ describe("property failures", () => {
             timeoutPropertyReleased = true
           })
       ),
-    { fails: true, timeout: 10, fastCheck: { numRuns: 1 } }
+    { fails: true, timeout: 10, arbitrary: { runs: 1, maxDiscards: 0, seed: "property-timeout" } }
   )
 })

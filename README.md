@@ -8,18 +8,17 @@ The API mirrors [`@effect/vitest`](https://www.npmjs.com/package/@effect/vitest)
 suites move between the two runners without rewrites — while keeping Bun's test
 runner speed and zero extra runner dependency.
 
-> **Status**: this package tracks the Effect v4 release candidates
-> (`effect@4.0.0-rc.x`). It exists so Bun users don't have to wait for the
-> upstream `@effect/bun-test` proposal
+> **Status**: a community package. Effect officially supports Vitest only, so
+> the upstream proposal
 > ([Effect-TS/effect#5964](https://github.com/Effect-TS/effect/issues/5964),
-> [Effect-TS/effect-smol#2204](https://github.com/Effect-TS/effect-smol/pull/2204))
-> to land. If/when an official package ships, migrating should be a
-> find-and-replace of the import specifier.
+> [Effect-TS/effect#7521](https://github.com/Effect-TS/effect/pull/7521)) was
+> closed in favour of maintaining it here. Each release follows the matching
+> `@effect/vitest` release.
 
 ## Installation
 
 ```sh
-bun add -d @voila.dev/effect-bun-test effect@rc
+bun add -d @voila.dev/effect-bun-test effect
 ```
 
 ## Usage
@@ -65,9 +64,11 @@ bun test
 - `it.live` — same, against the live services
 - `it.effect.skip / .only / .skipIf / .runIf / .fails / .each / .prop`
 - `layer(myLayer)(...)` — share a memoized `Layer` across tests, with nested
-  `it.layer` and automatic release; `excludeTestServices` supported
+  `it.layer` and automatic release; `excludeTestServices` supported, and
+  `concurrent` runs a named block's tests concurrently (`describe.concurrent`)
 - `it.prop` / `it.effect.prop` / `it.live.prop` — property testing via
-  `effect/testing/FastCheck`, accepting `Schema` or `Arbitrary` inputs
+  `effect/Arbitrary`, accepting `Schema` or `Arbitrary` inputs; pass
+  `{ arbitrary: { runs, seed, … } }` as the options to tune the check
 - `flakyTest` — retry an Effect test for up to a timeout
 - `@voila.dev/effect-bun-test/utils` — the `@effect/vitest/utils` assertion
   helpers (`assertSome`, `assertSuccess`, `assertExitFailure`, …)
@@ -98,7 +99,15 @@ it.effect("cleans up on timeout", () =>
 
 ## Versioning
 
-`0.<effect rc>.<build>`: `0.112.x` is built against `effect@4.0.0-rc.112`.
+`<effect major>.<effect minor>.<build>`: `4.0.x` is built and tested against
+`effect@4.0` and peers on `effect@^4.0.3`. The patch number counts builds, not
+Effect patches.
+
+The `0.112.x` line targeted `effect@4.0.0-rc.112`. Moving from it:
+`it.prop` options take `arbitrary` (`Arbitrary.CheckOptions`) instead of
+`fastCheck`, `FastCheck` arbitraries become `effect/Arbitrary` ones (or plain
+`Schema`s), and `it.effect.each` tests receive `(case, ctx)` as in
+`@effect/vitest`.
 
 ## License
 

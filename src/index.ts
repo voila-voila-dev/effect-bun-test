@@ -12,7 +12,7 @@ import type * as Effect from "effect/Effect"
 import type * as Layer from "effect/Layer"
 import type * as Schema from "effect/Schema"
 import type * as Scope from "effect/Scope"
-import type * as FC from "effect/testing/FastCheck"
+import type * as Arbitrary from "effect/Arbitrary"
 import * as internal from "./internal/internal.ts"
 import * as utils from "./utils.ts"
 
@@ -195,11 +195,11 @@ export namespace BunTest {
    * @since 4.0.0
    */
   export type Arbitraries =
-    | Array<Schema.Schema<any> | FC.Arbitrary<any>>
-    | { [K in string]: Schema.Schema<any> | FC.Arbitrary<any> }
+    | Array<Schema.Schema<any> | Arbitrary.Arbitrary<any>>
+    | { [K in string]: Schema.Schema<any> | Arbitrary.Arbitrary<any> }
 
   type ArbitraryValue<A> = A extends Schema.Schema<infer T> ? T
-    : A extends FC.Arbitrary<infer T> ? T
+    : A extends Arbitrary.Arbitrary<infer T> ? T
     : never
 
   /**
@@ -212,7 +212,7 @@ export namespace BunTest {
     only: BunTest.Test<R>
     each: <T>(
       cases: ReadonlyArray<T>
-    ) => <A, E>(name: string, self: TestFunction<A, E, R, Array<T>>, timeout?: number | TestOptions) => void
+    ) => <A, E>(name: string, self: TestFunction<A, E, R, [T, TestContext]>, timeout?: number | TestOptions) => void
     fails: BunTest.Test<R>
 
     /**
@@ -224,8 +224,8 @@ export namespace BunTest {
      * This includes typed Effect failures, thrown exceptions, and defects such as failed assertions. Effect
      * interruption continues to interrupt the test.
      *
-     * The wrapper-managed timeout interrupts the Effect fiber running the property, so Effect finalizers run during
-     * that interruption.
+     * The wrapper-managed timeout interrupts the Effect fiber running generation, property evaluation, and shrinking.
+     * Effect finalizers run during that interruption.
      *
      * **Gotchas**
      *
@@ -250,11 +250,7 @@ export namespace BunTest {
       timeout?:
         | number
         | TestOptions & {
-          fastCheck?: FC.Parameters<
-            {
-              [K in keyof Arbs]: ArbitraryValue<Arbs[K]>
-            }
-          >
+          arbitrary?: Arbitrary.CheckOptions
         }
     ) => void
   }
@@ -269,6 +265,7 @@ export namespace BunTest {
       timeout?: Duration.Input
     ) => Effect.Effect<A, never, R2>
     readonly layer: <R2, E>(layer: Layer.Layer<R2, E, R>, options?: {
+      readonly concurrent?: boolean
       readonly timeout?: Duration.Input
     }) => {
       (f: (it: BunTest.MethodsNonLive<R | R2>) => void): void
@@ -300,11 +297,7 @@ export namespace BunTest {
       timeout?:
         | number
         | TestOptions & {
-          fastCheck?: FC.Parameters<
-            {
-              [K in keyof Arbs]: ArbitraryValue<Arbs[K]>
-            }
-          >
+          arbitrary?: Arbitrary.CheckOptions
         }
     ) => void
   }
@@ -315,6 +308,7 @@ export namespace BunTest {
   export interface Methods<R = never> extends MethodsNonLive<R> {
     readonly live: BunTest.Tester<Scope.Scope | R>
     readonly layer: <R2, E>(layer: Layer.Layer<R2, E, R>, options?: {
+      readonly concurrent?: boolean
       readonly memoMap?: Layer.MemoMap
       readonly timeout?: Duration.Input
       readonly excludeTestServices?: boolean
@@ -374,6 +368,7 @@ export const live: BunTest.Tester<Scope.Scope> = internal.live
 export const layer: <R, E>(
   layer_: Layer.Layer<R, E>,
   options?: {
+    readonly concurrent?: boolean
     readonly memoMap?: Layer.MemoMap
     readonly timeout?: Duration.Input
     readonly excludeTestServices?: boolean
