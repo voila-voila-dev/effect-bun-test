@@ -203,7 +203,9 @@ const skipCollector = Object.assign(
 /** @internal */
 export const defaultApi: BunTest.Collector = Object.assign(baseCollector, {
   skip: skipCollector,
-  only: registerWith(bunTest.only) as BunTest.API,
+  // Read on call: under `CI`, Bun throws as soon as `test.only` is accessed,
+  // which would fail every suite that merely imports this module.
+  only: ((...args: Parameters<ReturnType<typeof registerWith>>) => registerWith(bunTest.only)(...args)) as BunTest.API,
   todo: (name: string) => bunTest.todo(name, () => {}),
   skipIf: (condition: unknown) => registerWith(bunTest.skipIf(condition)) as BunTest.API,
   runIf: (condition: unknown) => registerWith(bunTest.if(condition)) as BunTest.API,
